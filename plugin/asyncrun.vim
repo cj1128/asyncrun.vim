@@ -53,6 +53,7 @@
 "     -save=0/1/2  - non-zero to save current/1 or all/2 modified buffer(s)
 "     -program=?   - set to 'make' to use '&makeprg'
 "     -raw=1       - use raw output (not match with the errorformat)
+"     -output=output       - specify buf name to output
 "
 "     All options must start with a minus and position **before** `[cmd]`.
 "     Since no shell command starts with a minus. So they can be
@@ -397,15 +398,19 @@ function! s:AsyncRun_Job_Update(count)
 		endif
 		let l:text = substitute(l:text, '\r$', '', 'g')
 		if l:text != ''
-			if l:raw == 0
-				if and(g:asyncrun_skip, 1) == 0
-					caddexpr l:text
-				else
-					noautocmd caddexpr l:text
-				endif
-			else
-				call setqflist([{'text':l:text}], 'a')
-			endif
+      if s:async_info.bufnr != -1
+        call s:output_to_buf(l:text)
+      else
+        if l:raw == 0
+          if and(g:asyncrun_skip, 1) == 0
+            caddexpr l:text
+          else
+            noautocmd caddexpr l:text
+          endif
+        else
+          call setqflist([{'text':l:text}], 'a')
+        endif
+      endif
 		elseif g:asyncrun_trim == 0
 			call setqflist(l:empty, 'a')
 		endif
@@ -506,15 +511,23 @@ function! s:AsyncRun_Job_OnFinish()
 	let l:last = l:current - s:async_start
 	let l:check = s:AsyncRun_Job_CheckScroll()
 	if s:async_code == 0
-		let l:text = "[Finished in ".l:last." seconds]"
+		let l:text = "[Success in ".l:last." seconds]"
 		if !s:async_info.strip
-			call setqflist([{'text':l:text}], 'a')
+      if s:async_info.bufnr != -1
+        call s:output_to_buf(l:text)
+      else
+			  call setqflist([{'text':l:text}], 'a')
+      endif
 		endif
 		let g:asyncrun_status = "success"
 	else
 		let l:text = 'with code '.s:async_code
-		let l:text = "[Finished in ".l:last." seconds ".l:text."]"
-		call setqflist([{'text':l:text}], 'a')
+		let l:text = "[Error in ".l:last." seconds ".l:text."]"
+    if s:async_info.bufnr != -1
+      call s:output_to_buf(l:text)
+    else
+		  call setqflist([{'text':l:text}], 'a')
+    endif
 		let g:asyncrun_status = "failure"
 	endif
 	let s:async_state = 0
@@ -759,18 +772,22 @@ function! s:AsyncRun_Job_Start(cmd)
 		let l:arguments = "[".l:name."]"
 		let l:title = ':AsyncRun '.l:name
 		if !s:async_info.append
-			if s:async_nvim == 0
-				if v:version >= 800 || has('patch-7.4.2210')
-					call setqflist([], ' ', {'title':l:title})
-				else
-					call setqflist([], ' ')
-				endif
-			else
-				call setqflist([], ' ', l:title)
-			endif
+      if s:async_info.bufnr != -1
+        call deletebufline(s:async_info.bufnr, 1, '$')
+      else
+        if s:async_nvim == 0
+          if v:version >= 800 || has('patch-7.4.2210')
+            call setqflist([], ' ', {'title':l:title})
+          else
+            call setqflist([], ' ')
+          endif
+        else
+          call setqflist([], ' ', l:title)
+        endif
+      end
 		endif
 		if !s:async_info.strip
-			call setqflist([{'text':l:arguments}], 'a')
+			"call setqflist([{'text':l:arguments}], 'a')
 		endif
 		let l:name = 'g:AsyncRun_Job_OnTimer'
 		let s:async_timer = timer_start(100, l:name, {'repeat':-1})
@@ -877,6 +894,7 @@ function! s:ExtractOpt(command)
 	let opts.raw = get(opts, 'raw', '')
 	let opts.strip = get(opts, 'strip', '')
 	let opts.append = get(opts, 'append', '')
+	let opts.output = get(opts, 'output', '')
 	if 0
 		echom 'cwd:'. opts.cwd
 		echom 'mode:'. opts.mode
@@ -1233,6 +1251,8 @@ function! s:run(opts)
 		let s:async_info.range_buf = opts.range_buf
 		let s:async_info.strip = opts.strip
 		let s:async_info.append = opts.append
+		let s:async_info.bufnr = opts.output == '' ? -1 : bufnr(opts.output)
+		let s:async_info.bufline = 0
 		if s:AsyncRun_Job_Start(l:command) != 0
 			call s:AutoCmd('Error')
 		endif
@@ -1768,6 +1788,11 @@ function! asyncrun#execute(mode, cwd, save)
 	endif
 endfunc
 
+function! s:output_to_buf(line)
+  echom 'cj' . a:line
+  call appendbufline(s:async_info.bufnr, s:async_info.bufline, a:line)
+  let s:async_info.bufline += 1
+endfunction
 
 " auto open quickfix window
 if has("autocmd")
